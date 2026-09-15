@@ -11,6 +11,9 @@ CATEGORIA_BUSQUEDA = {
     "gpu": "placa de video RTX RX",
     "psu": "fuente de poder 650W",
     "storage": "SSD NVMe",
+    "case": "gabinete PC",
+    "cooler": "cooler CPU",
+    "monitor": "monitor gaming",
 }
 
 
@@ -28,6 +31,12 @@ def clasificar_tipo(nombre):
         return "psu"
     if any(term in texto for term in ("ssd", "nvme", "disco sólido", "disco solido")):
         return "storage"
+    if any(term in texto for term in ("gabinete", "case pc", "chasis")):
+        return "case"
+    if any(term in texto for term in ("cooler", "disipador", "refrigeración líquida", "refrigeracion liquida")):
+        return "cooler"
+    if "monitor" in texto or "display" in texto:
+        return "monitor"
     return None
 
 

@@ -150,8 +150,14 @@ def builder_options():
         consulta = f"placa de video {busqueda or 'RTX RX'}"
     elif tipo == "psu":
         consulta = f"fuente de poder {busqueda or '650W'}"
-    else:
+    elif tipo == "storage":
         consulta = f"SSD {busqueda or 'NVMe'}"
+    elif tipo == "case":
+        consulta = f"gabinete {busqueda or 'gaming'}"
+    elif tipo == "cooler":
+        consulta = f"cooler CPU {busqueda or 'air'}"
+    else:
+        consulta = f"monitor {busqueda or 'gaming'}"
 
     try:
         resultados = buscar_hardgamers(consulta, ordenar_menor_precio=True)
