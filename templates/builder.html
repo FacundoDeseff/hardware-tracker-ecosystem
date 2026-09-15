@@ -6,201 +6,62 @@
     <title>Armador de PC | Hardware Tracker</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        :root { --builder-cyan: #00f5d4; --builder-lime: #b8ff00; }
-        body { background: radial-gradient(circle at top right, rgba(0,245,212,.09), transparent 32rem), #101316; }
-        .builder-hero { border-left: 4px solid var(--builder-cyan); }
-        .slot-card, .summary-card { background: rgba(31, 36, 41, .92); border: 1px solid rgba(255,255,255,.1); }
-        .slot-card { transition: border-color .2s ease, transform .2s ease; }
-        .slot-card:hover { border-color: var(--builder-cyan); transform: translateY(-2px); }
+        :root { --cyan: #00f5d4; --lime: #b8ff00; }
+        body { background: radial-gradient(circle at 85% 0, rgba(0,245,212,.1), transparent 32rem), #101316; }
+        .builder-hero { border-left: 4px solid var(--cyan); }
+        .step-link { color: #9ba6ad; cursor: pointer; }
+        .step-link.active { color: var(--cyan); border-bottom: 2px solid var(--cyan); }
+        .component-card, .summary-card { background: rgba(31,36,41,.94); border: 1px solid rgba(255,255,255,.1); }
+        .component-card { transition: transform .2s, border-color .2s; }
+        .component-card:hover { transform: translateY(-3px); border-color: var(--cyan); }
+        .component-image { height: 145px; object-fit: contain; background: rgba(255,255,255,.03); }
         .summary-card { position: sticky; top: 1rem; }
+        .component-price { color: var(--lime); }
         .progress { height: 12px; background: #252c31; }
-        .progress-bar { background: linear-gradient(90deg, var(--builder-cyan), var(--builder-lime)); }
-        .component-price { color: var(--builder-lime); }
+        .progress-bar { background: linear-gradient(90deg, var(--cyan), var(--lime)); }
     </style>
 </head>
 <body class="text-light">
     <nav class="navbar navbar-expand-lg border-bottom border-secondary bg-body-tertiary">
         <div class="container">
             <a class="navbar-brand fw-bold" href="/">🔎 Hardware Tracker</a>
-            <div class="d-flex gap-2">
-                <a href="/seguimiento" class="btn btn-outline-warning btn-sm">⭐ Seguimiento</a>
-                <a href="/" class="btn btn-outline-primary btn-sm">⬅ Buscador</a>
-            </div>
+            <div class="d-flex gap-2"><a href="/seguimiento" class="btn btn-outline-warning btn-sm">⭐ Seguimiento</a><a href="/" class="btn btn-outline-primary btn-sm">⬅ Buscador</a></div>
         </div>
     </nav>
-
     <main class="container py-5">
-        <header class="builder-hero ps-3 mb-4">
-            <p class="text-info text-uppercase small fw-semibold mb-1">Configurador compatible</p>
-            <h1 class="display-6 fw-bold mb-2">🛠️ Armador de PC</h1>
-            <p class="text-secondary mb-0">Elegí tus componentes y revisá compatibilidad, consumo y presupuesto en tiempo real.</p>
-        </header>
-
+        <header class="builder-hero ps-3 mb-4"><p class="text-info text-uppercase small fw-semibold mb-1">Asistente de armado</p><h1 class="display-6 fw-bold mb-2">🛠️ Armador de PC</h1><p class="text-secondary mb-0">Elegí componentes reales de tiendas argentinas y validá tu configuración paso a paso.</p></header>
+        <nav class="d-flex flex-wrap gap-3 border-bottom border-secondary mb-4 pb-2" aria-label="Pasos del armado">
+            <button class="btn btn-link text-decoration-none p-0 step-link active" data-step="0">1. CPU</button><button class="btn btn-link text-decoration-none p-0 step-link" data-step="1">2. Motherboard</button><button class="btn btn-link text-decoration-none p-0 step-link" data-step="2">3. RAM</button><button class="btn btn-link text-decoration-none p-0 step-link" data-step="3">4. GPU</button><button class="btn btn-link text-decoration-none p-0 step-link" data-step="4">5. Fuente</button><button class="btn btn-link text-decoration-none p-0 step-link" data-step="5">6. Storage</button><button class="btn btn-link text-decoration-none p-0 step-link" data-step="6">7. Resumen</button>
+        </nav>
         <div class="row g-4">
-            <section class="col-lg-8">
-                <div class="row g-3">
-                    {% for tipo, etiqueta in [('cpu', 'Procesador'), ('motherboard', 'Placa Madre'), ('ram', 'Memoria RAM'), ('gpu', 'Placa de Video'), ('psu', 'Fuente de Poder'), ('storage', 'Almacenamiento')] %}
-                    <div class="col-md-6">
-                        <article class="slot-card rounded-3 p-3 h-100">
-                            <div class="d-flex justify-content-between align-items-center mb-2">
-                                <label for="slot-{{ tipo }}" class="form-label fw-semibold mb-0">{{ etiqueta }}</label>
-                                <span class="badge text-bg-dark border border-secondary">{{ tipo|upper }}</span>
-                            </div>
-                            <select id="slot-{{ tipo }}" class="form-select builder-slot" data-tipo="{{ tipo }}">
-                                <option value="">Elegir {{ etiqueta|lower }}</option>
-                                {% for item in catalogo if item.tipo == tipo %}
-                                <option value="{{ item.id }}">{{ item.nombre }} - ${{ "{:,.0f}".format(item.precio).replace(",", "X").replace(".", ",").replace("X", ".") }}</option>
-                                {% endfor %}
-                            </select>
-                            <div id="meta-{{ tipo }}" class="small text-secondary mt-2">Sin selección</div>
-                        </article>
-                    </div>
-                    {% endfor %}
-                </div>
-            </section>
-
-            <aside class="col-lg-4">
-                <div class="summary-card rounded-3 p-4">
-                    <div class="d-flex justify-content-between align-items-center mb-3">
-                        <h2 class="h5 mb-0">Resumen del Presupuesto</h2>
-                        <span id="statusBadge" class="badge text-bg-secondary">En espera</span>
-                    </div>
-                    <div class="mb-4">
-                        <div class="text-secondary small">Precio Total</div>
-                        <div id="totalPrice" class="display-6 fw-bold component-price">$0</div>
-                    </div>
-                    <div class="mb-2 d-flex justify-content-between">
-                        <span class="text-secondary">Consumo estimado</span>
-                        <strong><span id="powerUsage">150</span>W / <span id="psuCapacity">-</span></strong>
-                    </div>
-                    <div class="progress mb-2" role="progressbar" aria-label="Consumo estimado">
-                        <div id="powerBar" class="progress-bar" style="width: 0%"></div>
-                    </div>
-                    <div id="compatibilityDetails" class="small text-secondary mb-4">Seleccioná componentes para validar el armado.</div>
-                    <div class="d-grid gap-2">
-                        <button id="saveBuild" type="button" class="btn btn-primary" disabled>💾 Guardar todo este Build en seguimiento</button>
-                        <button id="clearBuild" type="button" class="btn btn-outline-secondary">Limpiar selección</button>
-                    </div>
-                </div>
-            </aside>
+            <section class="col-lg-8"><div id="wizardStep"></div><div class="d-flex flex-wrap justify-content-between gap-2 mt-4"><button id="backButton" type="button" class="btn btn-outline-secondary">← Atrás</button><button id="skipButton" type="button" class="btn btn-outline-warning">Omitir este paso</button><button id="nextButton" type="button" class="btn btn-primary">Siguiente →</button></div></section>
+            <aside class="col-lg-4"><div class="summary-card rounded-3 p-4"><div class="d-flex justify-content-between align-items-center mb-3"><h2 class="h5 mb-0">Resumen del Presupuesto</h2><span id="statusBadge" class="badge text-bg-secondary">En espera</span></div><div class="mb-4"><div class="text-secondary small">Precio Total</div><div id="totalPrice" class="display-6 fw-bold component-price">$0</div></div><div class="mb-2 d-flex justify-content-between"><span class="text-secondary">Consumo estimado</span><strong><span id="powerUsage">150</span>W / <span id="psuCapacity">-</span></strong></div><div class="progress mb-2"><div id="powerBar" class="progress-bar" style="width:0%"></div></div><div id="compatibilityDetails" class="small text-secondary mb-3">Completá el asistente para validar el armado.</div><div id="buildList" class="small text-secondary"></div><button id="saveBuild" type="button" class="btn btn-success w-100 mt-4" disabled>💾 Guardar todo este Build en seguimiento</button></div></aside>
         </div>
     </main>
-
     <div id="toastContainer" class="toast-container position-fixed bottom-0 end-0 p-3" aria-live="polite" aria-atomic="true"></div>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        const catalogo = {{ catalogo | tojson }};
-        const porId = Object.fromEntries(catalogo.map(item => [item.id, item]));
-        const slots = [...document.querySelectorAll('.builder-slot')];
-        let ultimoResultado = null;
-
-        function precioARS(valor) {
-            return new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 }).format(valor);
-        }
-
-        function toast(mensaje, tipo = 'success') {
-            const contenedor = document.getElementById('toastContainer');
-            const elemento = document.createElement('div');
-            elemento.className = `toast align-items-center text-bg-${tipo} border-0`;
-            elemento.innerHTML = `<div class="d-flex"><div class="toast-body">${mensaje}</div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div>`;
-            contenedor.appendChild(elemento);
-            const instancia = new bootstrap.Toast(elemento, { delay: 3500 });
-            elemento.addEventListener('hidden.bs.toast', () => elemento.remove());
-            instancia.show();
-        }
-
-        function seleccion() {
-            return Object.fromEntries(slots.map(slot => [slot.dataset.tipo, slot.value]).filter(([, id]) => id));
-        }
-
-        function renderMeta() {
-            slots.forEach(slot => {
-                const item = porId[slot.value];
-                const meta = document.getElementById(`meta-${slot.dataset.tipo}`);
-                if (!item) { meta.textContent = 'Sin selección'; return; }
-                const datos = [];
-                if (item.socket) datos.push(item.socket);
-                if (item.ram_type) datos.push(item.ram_type);
-                if (item.tdp) datos.push(`${item.tdp}W TDP`);
-                if (item.watts) datos.push(`${item.watts}W`);
-                meta.textContent = `${datos.join(' · ')} · ${precioARS(item.precio)}`;
-            });
-        }
-
-        async function validar() {
-            const res = await fetch('/api/builder/validate', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ componentes: seleccion() })
-            });
-            if (!res.ok) throw new Error('No se pudo validar el armado.');
-            ultimoResultado = await res.json();
-            document.getElementById('totalPrice').textContent = precioARS(ultimoResultado.precio_total);
-            document.getElementById('powerUsage').textContent = ultimoResultado.consumo_estimado;
-            document.getElementById('psuCapacity').textContent = ultimoResultado.fuente_watts || '-';
-            const porcentaje = ultimoResultado.fuente_watts ? Math.min(100, ultimoResultado.consumo_estimado / ultimoResultado.fuente_watts * 100) : 0;
-            document.getElementById('powerBar').style.width = `${porcentaje}%`;
-            const badge = document.getElementById('statusBadge');
-            const detalle = document.getElementById('compatibilityDetails');
-            if (ultimoResultado.compatible) {
-                badge.className = 'badge bg-success';
-                badge.textContent = '✓ Compatible';
-                detalle.className = 'small text-success mb-4';
-                detalle.textContent = 'Socket, memoria y potencia de fuente compatibles.';
-            } else {
-                badge.className = 'badge bg-danger';
-                badge.textContent = '⚠️ Incompatibilidad detectada';
-                detalle.className = 'small text-danger mb-4';
-                detalle.innerHTML = ultimoResultado.errores.map(error => `<div>• ${error}</div>`).join('');
-            }
-            document.getElementById('saveBuild').disabled = !Object.keys(seleccion()).length;
-        }
-
-        async function actualizarOpcionesDependientes() {
-            const cpu = porId[document.getElementById('slot-cpu').value];
-            const filtros = cpu ? `&socket=${encodeURIComponent(cpu.socket)}&ram_type=${encodeURIComponent(cpu.ram_type)}` : '';
-            for (const tipo of ['motherboard', 'ram']) {
-                const slot = document.getElementById(`slot-${tipo}`);
-                const valorAnterior = slot.value;
-                const res = await fetch(`/api/builder/options?tipo=${tipo}${filtros}`);
-                const data = await res.json();
-                slot.innerHTML = `<option value="">Elegir ${tipo === 'motherboard' ? 'placa madre' : 'memoria ram'}</option>` + data.opciones.map(item => `<option value="${item.id}">${item.nombre} - ${precioARS(item.precio)}</option>`).join('');
-                if (data.opciones.some(item => item.id === valorAnterior)) slot.value = valorAnterior;
-            }
-        }
-
-        slots.forEach(slot => slot.addEventListener('change', async () => {
-            renderMeta();
-            if (slot.dataset.tipo === 'cpu') await actualizarOpcionesDependientes();
-            renderMeta();
-            try { await validar(); } catch (error) { toast(error.message, 'danger'); }
-        }));
-
-        document.getElementById('clearBuild').addEventListener('click', () => {
-            slots.forEach(slot => { slot.value = ''; });
-            renderMeta();
-            validar().catch(() => {});
-        });
-
-        document.getElementById('saveBuild').addEventListener('click', async () => {
-            const boton = document.getElementById('saveBuild');
-            boton.disabled = true;
-            try {
-                const res = await fetch('/api/builder/save', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ componentes: seleccion() })
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.mensaje || 'No se pudo guardar el build.');
-                toast('Build guardado en seguimiento');
-            } catch (error) {
-                toast(error.message, 'danger');
-            } finally {
-                boton.disabled = !Object.keys(seleccion()).length;
-            }
-        });
-
-        renderMeta();
-        validar().catch(() => {});
-    </script>
-</body>
-</html>
+        const steps = [
+            { tipo:'cpu', titulo:'Elegí tu Procesador', hint:'Filtrá por plataforma AMD o Intel.', placeholder:'Buscar Ryzen, Core, AMD o Intel...' },
+            { tipo:'motherboard', titulo:'Elegí la Placa Madre', hint:'Solo se muestran placas compatibles con el socket elegido.', placeholder:'Buscar motherboard...' },
+            { tipo:'ram', titulo:'Elegí la Memoria RAM', hint:'El tipo de memoria se adapta a tu CPU y motherboard.', placeholder:'Buscar DDR4 o DDR5...' },
+            { tipo:'gpu', titulo:'Elegí la Placa de Video', hint:'Consultá ofertas reales y el consumo estimado.', placeholder:'Buscar RTX, RX o Radeon...' },
+            { tipo:'psu', titulo:'Elegí la Fuente de Poder', hint:'Se filtra según CPU + GPU + margen del sistema.', placeholder:'Buscar fuente 650W, 750W...' },
+            { tipo:'storage', titulo:'Elegí el Almacenamiento', hint:'Podés omitir este paso.', placeholder:'Buscar SSD, NVMe...' },
+            { tipo:'summary', titulo:'Resumen final', hint:'Revisá tu selección antes de guardar.' }
+        ];
+        let pasoActual = 0;
+        const seleccion = {};
+        const precioARS = valor => new Intl.NumberFormat('es-AR', { style:'currency', currency:'ARS', maximumFractionDigits:0 }).format(valor);
+        function escapeHtml(valor) { return String(valor || '').replace(/[&<>'"]/g, caracter => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' }[caracter])); }
+        function toast(mensaje, tipo='success') { const el=document.createElement('div'); el.className=`toast align-items-center text-bg-${tipo} border-0`; el.innerHTML=`<div class="d-flex"><div class="toast-body">${escapeHtml(mensaje)}</div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div>`; document.getElementById('toastContainer').appendChild(el); const instance=new bootstrap.Toast(el,{delay:3500}); el.addEventListener('hidden.bs.toast',()=>el.remove()); instance.show(); }
+        function filtrosCompatibles() { const cpu=seleccion.cpu, mother=seleccion.motherboard, gpu=seleccion.gpu; return { socket:(mother || cpu || {}).socket || '', ram_type:(mother || cpu || {}).ram_type || '', recommended_watts:(cpu?.tdp || 0)+(gpu?.tdp || 0)+150 }; }
+        function actualizarResumen(resultado) { document.getElementById('totalPrice').textContent=precioARS(resultado.precio_total); document.getElementById('powerUsage').textContent=resultado.consumo_estimado; document.getElementById('psuCapacity').textContent=resultado.fuente_watts || '-'; document.getElementById('powerBar').style.width=`${resultado.fuente_watts ? Math.min(100, resultado.consumo_estimado/resultado.fuente_watts*100) : 0}%`; const badge=document.getElementById('statusBadge'), detail=document.getElementById('compatibilityDetails'); if(resultado.compatible){ badge.className='badge bg-success'; badge.textContent='✓ Compatible'; detail.className='small text-success mb-3'; detail.textContent='Socket, memoria y potencia compatibles.'; } else { badge.className='badge bg-danger'; badge.textContent='⚠️ Incompatibilidad detectada'; detail.className='small text-danger mb-3'; detail.innerHTML=resultado.errores.map(error=>`<div>• ${escapeHtml(error)}</div>`).join(''); } document.getElementById('buildList').innerHTML=Object.values(seleccion).map(item=>`<div class="d-flex justify-content-between border-bottom border-secondary py-1"><span>${escapeHtml(item.nombre)}</span><strong>${precioARS(item.precio)}</strong></div>`).join(''); document.getElementById('saveBuild').disabled=!Object.keys(seleccion).length; }
+        async function validar() { const response=await fetch('/api/builder/validate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({componentes:seleccion})}); if(!response.ok) throw new Error('No se pudo validar el armado.'); actualizarResumen(await response.json()); }
+        function renderCard(item) { const image=item.imagen ? `<img class="card-img-top component-image" src="${escapeHtml(item.imagen)}" alt="${escapeHtml(item.nombre)}" referrerpolicy="no-referrer">` : '<div class="component-image d-flex align-items-center justify-content-center fs-1">🧩</div>'; const meta=[item.socket,item.ram_type,item.tdp ? `${item.tdp}W TDP`:''].filter(Boolean).join(' · '); return `<article class="component-card card h-100 overflow-hidden"><div>${image}</div><div class="card-body d-flex flex-column"><div class="small text-info mb-1">${escapeHtml(item.tienda)}</div><h3 class="h6">${escapeHtml(item.nombre)}</h3><p class="small text-secondary mb-3">${escapeHtml(meta || 'Datos técnicos inferidos')}</p><div class="mt-auto"><div class="component-price fw-bold fs-5 mb-2">${precioARS(item.precio)}</div><button class="btn btn-outline-info w-100" data-component-id="${escapeHtml(item.id)}">Seleccionar este componente</button></div></div></article>`; }
+        async function cargarOpciones(busqueda='') { const paso=steps[pasoActual], cards=document.getElementById('cards'); if(!cards)return; const params=new URLSearchParams({tipo:paso.tipo,q:busqueda,...filtrosCompatibles()}); cards.innerHTML='<div class="text-secondary">Consultando ofertas reales...</div>'; try { const response=await fetch(`/api/builder/options?${params}`), data=await response.json(); if(!response.ok)throw new Error(data.mensaje || 'No se pudieron cargar ofertas.'); cards.innerHTML=data.opciones.length ? data.opciones.map(renderCard).join('') : '<div class="text-secondary">No se encontraron ofertas para este filtro.</div>'; cards.querySelectorAll('[data-component-id]').forEach(button=>button.addEventListener('click',()=>{ const item=data.opciones.find(option=>option.id===button.dataset.componentId); seleccion[paso.tipo]=item; toast(`${item.nombre} seleccionado`); validar().catch(error=>toast(error.message,'danger')); cargarPaso(); })); } catch(error) { cards.innerHTML=`<div class="alert alert-danger">${escapeHtml(error.message)}</div>`; } }
+        async function cargarPaso() { const paso=steps[pasoActual]; document.querySelectorAll('.step-link').forEach(link=>link.classList.toggle('active',Number(link.dataset.step)===pasoActual)); document.getElementById('backButton').disabled=pasoActual===0; document.getElementById('skipButton').hidden=pasoActual>=6; document.getElementById('nextButton').hidden=pasoActual>=6; if(paso.tipo==='summary'){ document.getElementById('wizardStep').innerHTML=`<div class="component-card rounded-3 p-4"><h2 class="h4">${paso.titulo}</h2><p class="text-secondary">${paso.hint}</p><div class="row g-3">${Object.values(seleccion).map(item=>`<div class="col-md-6"><div class="border border-secondary rounded p-3"><div class="small text-info">${escapeHtml(item.tienda)}</div><strong>${escapeHtml(item.nombre)}</strong><div class="component-price">${precioARS(item.precio)}</div></div></div>`).join('') || '<p class="text-secondary">No seleccionaste componentes.</p>'}</div></div>`; await validar(); return; } const vendor=paso.tipo==='cpu' ? '<div class="btn-group mb-3"><button class="btn btn-outline-info vendor-filter" data-query="AMD">AMD</button><button class="btn btn-outline-info vendor-filter" data-query="Intel">Intel</button><button class="btn btn-outline-secondary vendor-filter" data-query="">Todos</button></div>' : ''; document.getElementById('wizardStep').innerHTML=`<div class="component-card rounded-3 p-4"><div class="d-flex flex-wrap justify-content-between gap-2"><div><h2 class="h4">${paso.titulo}</h2><p class="text-secondary">${paso.hint}</p></div><span class="badge text-bg-dark">Datos en vivo</span></div>${vendor}<form id="searchForm" class="input-group mb-4"><input id="searchInput" class="form-control" placeholder="${paso.placeholder}"><button class="btn btn-outline-primary">Buscar ofertas</button></form><div id="cards" class="row row-cols-1 row-cols-md-2 g-3"></div></div>`; document.getElementById('searchForm').addEventListener('submit',event=>{event.preventDefault();cargarOpciones(document.getElementById('searchInput').value);}); document.querySelectorAll('.vendor-filter').forEach(button=>button.addEventListener('click',()=>cargarOpciones(button.dataset.query))); await cargarOpciones(); }
+        document.getElementById('nextButton').addEventListener('click',()=>{if(pasoActual<6){pasoActual++;cargarPaso();}}); document.getElementById('backButton').addEventListener('click',()=>{if(pasoActual>0){pasoActual--;cargarPaso();}}); document.getElementById('skipButton').addEventListener('click',()=>{delete seleccion[steps[pasoActual].tipo];if(pasoActual<6){pasoActual++;cargarPaso();}}); document.querySelectorAll('.step-link').forEach(link=>link.addEventListener('click',()=>{pasoActual=Number(link.dataset.step);cargarPaso();})); document.getElementById('saveBuild').addEventListener('click',async()=>{const response=await fetch('/api/builder/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({componentes:seleccion})});const data=await response.json();if(response.ok)toast('Build guardado en seguimiento');else toast(data.mensaje || 'No se pudo guardar','danger');}); cargarPaso(); validar().catch(()=>{});
++    </script>
++</body>
++</html>

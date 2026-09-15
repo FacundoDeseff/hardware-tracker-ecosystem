@@ -4,7 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 from flask import Flask, render_template, request, jsonify, redirect
 from agregador import buscar_hardgamers
-from pc_builder import filtrar_opciones, indexar_catalogo, obtener_catalogo, validar_compatibilidad
+from pc_builder import CATEGORIA_BUSQUEDA, enriquecer_resultados, validar_compatibilidad
 
 app = Flask(__name__)
 
@@ -13,6 +13,7 @@ HEADERS = {
 }
 
 ITEMS_POR_PAGINA = 12
+BUILDER_OPTIONS_CACHE = {}
 
 def asegurar_precio_objetivo(conexion):
     columnas = {fila[1] for fila in conexion.execute("PRAGMA table_info(componentes)")}
@@ -127,34 +128,56 @@ def actualizar_precio_objetivo(componente_id):
 
 @app.route("/builder")
 def builder():
-    return render_template("builder.html", catalogo=obtener_catalogo())
+    return render_template("builder.html")
 
 @app.route("/api/builder/options")
 def builder_options():
     tipo = request.args.get("tipo", "").strip().lower()
+    busqueda = request.args.get("q", "").strip()
     socket = request.args.get("socket", "").strip()
     ram_type = request.args.get("ram_type", "").strip()
-    tipos_validos = {componente["tipo"] for componente in obtener_catalogo()}
-    if tipo not in tipos_validos:
+    recommended_watts = request.args.get("recommended_watts", type=int)
+    if tipo not in CATEGORIA_BUSQUEDA:
         return jsonify({"status": "error", "mensaje": "Categoría no válida"}), 400
-    return jsonify({"status": "ok", "opciones": filtrar_opciones(tipo, socket, ram_type)})
+
+    consulta = busqueda or CATEGORIA_BUSQUEDA[tipo]
+    resultados = buscar_hardgamers(consulta, ordenar_menor_precio=True)
+    opciones = enriquecer_resultados(resultados, tipo)
+    if socket:
+        opciones = [opcion for opcion in opciones if opcion.get("socket") == socket]
+    if ram_type:
+        opciones = [opcion for opcion in opciones if opcion.get("ram_type") == ram_type]
+    if tipo == "psu" and recommended_watts:
+        opciones = [opcion for opcion in opciones if opcion.get("watts", 0) >= recommended_watts]
+    for opcion in opciones:
+        BUILDER_OPTIONS_CACHE[opcion["id"]] = opcion
+    return jsonify({"status": "ok", "opciones": opciones})
+
+
+def componentes_seleccionados(seleccionados):
+    componentes = {}
+    for tipo, seleccion in seleccionados.items():
+        if not seleccion:
+            continue
+        componente = BUILDER_OPTIONS_CACHE.get(seleccion) if isinstance(seleccion, str) else seleccion
+        if not isinstance(componente, dict) or componente.get("tipo") != tipo:
+            continue
+        try:
+            componente = dict(componente)
+            componente["precio"] = float(componente.get("precio", 0))
+            componente["tdp"] = int(componente.get("tdp", 0) or 0)
+            componente["watts"] = int(componente.get("watts", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        componentes[tipo] = componente
+    return componentes
 
 @app.route("/api/builder/validate", methods=["POST"])
 def builder_validate():
     datos = request.get_json(silent=True) or {}
     seleccionados = datos.get("componentes", datos)
-    catalogo = indexar_catalogo()
-    componentes = {}
-    errores = []
-
-    for tipo, componente_id in seleccionados.items():
-        if not componente_id:
-            continue
-        componente = catalogo.get(componente_id)
-        if not componente or componente["tipo"] != tipo:
-            errores.append(f"La selección de {tipo} no es válida.")
-            continue
-        componentes[tipo] = componente
+    componentes = componentes_seleccionados(seleccionados)
+    errores = [f"La selección de {tipo} no es válida." for tipo in seleccionados if seleccionados.get(tipo) and tipo not in componentes]
 
     resultado = validar_compatibilidad(componentes)
     resultado["errores"] = errores + resultado["errores"]
@@ -166,16 +189,13 @@ def builder_validate():
 def builder_save():
     datos = request.get_json(silent=True) or {}
     seleccionados = datos.get("componentes", datos)
-    catalogo = indexar_catalogo()
+    componentes = componentes_seleccionados(seleccionados)
     guardados = 0
-    for tipo, componente_id in seleccionados.items():
-        componente = catalogo.get(componente_id)
-        if not componente or componente["tipo"] != tipo:
-            continue
+    for componente in componentes.values():
         registrar_en_db(
             nombre=f"[Build] {componente['nombre']}",
             precio=float(componente["precio"]),
-            url=f"builder://{componente['id']}",
+            url=componente.get("enlace") or f"builder://{componente['id']}",
         )
         guardados += 1
     if not guardados:
