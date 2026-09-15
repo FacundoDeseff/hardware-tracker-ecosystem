@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="es" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Productos en Seguimiento</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-dark text-light">
+    <nav class="navbar navbar-expand-lg border-bottom border-secondary bg-body-tertiary">
+        <div class="container">
+            <a class="navbar-brand fw-bold" href="/">🔎 Hardware Tracker</a>
+            <div class="d-flex">
+                <a href="/" class="btn btn-outline-primary btn-sm">⬅ Volver al buscador</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container py-5">
+        <h2 class="fw-bold mb-4">⭐ Mis productos en seguimiento</h2>
+
+        {% if historial %}
+        <div class="table-responsive card bg-body-tertiary border-secondary shadow">
+            <table class="table table-dark table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Componente</th>
+                        <th>Precio Registrado</th>
+                        <th>Precio Objetivo</th>
+                        <th>Fecha de Registro</th>
+                        <th class="text-end">Acciones</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for componente_id, nombre, precio, fecha, url, precio_objetivo in historial %}
+                    <tr id="fila-{{ loop.index }}">
+                        <td class="fw-semibold text-truncate" style="max-width: 400px;">{{ nombre }}</td>
+                        <td class="text-success fw-bold">${{ "{:,.2f}".format(precio).replace(",", "X").replace(".", ",").replace("X", ".") }}</td>
+                        <td>
+                            <div class="input-group input-group-sm mb-2" style="max-width: 230px;">
+                                <span class="input-group-text">$</span>
+                                <input id="objetivo-{{ loop.index }}" type="number" min="0" step="0.01"
+                                       class="form-control" placeholder="Sin objetivo"
+                                       value="{{ precio_objetivo if precio_objetivo is not none else '' }}">
+                                <button type="button" class="btn btn-outline-warning"
+                                        onclick="guardarObjetivo({{ componente_id }}, {{ loop.index }}, {{ precio }})">
+                                    Guardar
+                                </button>
+                            </div>
+                            <span id="badge-objetivo-{{ loop.index }}" class="badge {% if precio_objetivo is not none and precio <= precio_objetivo %}bg-success{% elif precio_objetivo is not none %}bg-secondary{% else %}bg-dark border border-secondary{% endif %}">
+                                {% if precio_objetivo is none %}
+                                    Sin objetivo
+                                {% elif precio <= precio_objetivo %}
+                                    ¡En precio objetivo!
+                                {% else %}
+                                    Faltan ${{ "{:,.2f}".format(precio - precio_objetivo).replace(",", "X").replace(".", ",").replace("X", ".") }}
+                                {% endif %}
+                            </span>
+                        </td>
+                        <td class="text-secondary">{{ fecha }}</td>
+                        <td class="text-end">
+                            <a href="/ir_a_tienda?url={{ url }}" target="_blank" class="btn btn-outline-info btn-sm me-2">Ir a la tienda ↗</a>
+                            <button type="button" class="btn btn-outline-success btn-sm me-2"
+                                    onclick="abrirHistorial({{ componente_id }}, '{{ nombre | escape }}')">
+                                📈 Ver Historial
+                            </button>
+                            <button type="button" class="btn btn-outline-danger btn-sm" 
+                                    onclick="quitarSeguimiento('{{ url }}', 'fila-{{ loop.index }}')">
+                                🗑️ Quitar
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="alert alert-secondary text-center py-5">
+            Aún no agregaste ningún producto a tu lista de seguimiento.
+        </div>
+        {% endif %}
+    </div>
+
+    <div id="toastContainer" class="toast-container position-fixed bottom-0 end-0 p-3" aria-live="polite" aria-atomic="true"></div>
+
+    <div class="modal fade" id="modalHistorial" tabindex="-1" aria-labelledby="modalHistorialLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content bg-body-tertiary border-secondary">
+                <div class="modal-header border-secondary">
+                    <h5 class="modal-title" id="modalHistorialLabel">Evolución de precios</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="position-relative" style="height: 320px;">
+                        <canvas id="chartHistorial"></canvas>
+                    </div>
+                    <div id="resumenPrecios" class="row g-3 mt-2 text-center">
+                        <div class="col-4">
+                            <div class="text-secondary small">Precio mínimo</div>
+                            <div id="precioMinimo" class="text-success fw-bold">-</div>
+                        </div>
+                        <div class="col-4">
+                            <div class="text-secondary small">Precio máximo</div>
+                            <div id="precioMaximo" class="text-warning fw-bold">-</div>
+                        </div>
+                        <div class="col-4">
+                            <div class="text-secondary small">Variación</div>
+                            <div id="variacionPrecio" class="fw-bold">-</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let chartInstance;
+
+        function mostrarToast(mensaje, tipo = 'success') {
+            const contenedor = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast align-items-center text-bg-${tipo} border-0`;
+            toast.setAttribute('role', 'alert');
+            toast.setAttribute('aria-live', 'assertive');
+            toast.setAttribute('aria-atomic', 'true');
+            toast.innerHTML = `<div class="d-flex"><div class="toast-body">${mensaje}</div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Cerrar"></button></div>`;
+            contenedor.appendChild(toast);
+            const instancia = new bootstrap.Toast(toast, { delay: 3500 });
+            toast.addEventListener('hidden.bs.toast', () => toast.remove());
+            instancia.show();
+        }
+
+        function formatoPrecio(precio) {
+            return new Intl.NumberFormat('es-AR', {
+                style: 'currency',
+                currency: 'ARS',
+                minimumFractionDigits: 2
+            }).format(precio);
+        }
+
+        async function guardarObjetivo(componenteId, fila, precioActual) {
+            const input = document.getElementById(`objetivo-${fila}`);
+            const badge = document.getElementById(`badge-objetivo-${fila}`);
+            const valor = input.value.trim();
+            const precioObjetivo = valor === '' ? null : Number(valor);
+
+            if (precioObjetivo !== null && (!Number.isFinite(precioObjetivo) || precioObjetivo < 0)) {
+                alert('Ingresá un precio objetivo válido.');
+                return;
+            }
+
+            try {
+                const res = await fetch(`/api/seguimiento/${componenteId}/objetivo`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ precio_objetivo: precioObjetivo })
+                });
+                const data = await res.json();
+                if (!res.ok || data.status !== 'ok') {
+                    throw new Error(data.mensaje || 'No se pudo guardar el objetivo.');
+                }
+
+                if (precioObjetivo === null) {
+                    badge.className = 'badge bg-dark border border-secondary';
+                    badge.textContent = 'Sin objetivo';
+                } else if (precioActual <= precioObjetivo) {
+                    badge.className = 'badge bg-success';
+                    badge.textContent = '¡En precio objetivo!';
+                } else {
+                    badge.className = 'badge bg-secondary';
+                    badge.textContent = `Faltan ${formatoPrecio(precioActual - precioObjetivo)}`;
+                }
+                mostrarToast('Precio objetivo actualizado');
+            } catch (error) {
+                alert(error.message);
+            }
+        }
+
+        async function abrirHistorial(id, nombre) {
+            const titulo = document.getElementById('modalHistorialLabel');
+            titulo.textContent = `Evolución de precios: ${nombre}`;
+            if (chartInstance) {
+                chartInstance.destroy();
+                chartInstance = null;
+            }
+            new bootstrap.Modal(document.getElementById('modalHistorial')).show();
+
+            try {
+                const res = await fetch(`/api/historial/${id}`);
+                if (!res.ok) throw new Error('No se pudo obtener el historial');
+
+                const historial = await res.json();
+                if (!Array.isArray(historial.precios) || !historial.precios.length) {
+                    throw new Error('No hay datos históricos disponibles');
+                }
+
+                const precios = historial.precios.map(Number);
+                const minimo = Math.min(...precios);
+                const maximo = Math.max(...precios);
+                const inicial = precios[0];
+                const final = precios[precios.length - 1];
+                const variacion = inicial === 0 ? 0 : ((final - inicial) / inicial) * 100;
+
+                document.getElementById('precioMinimo').textContent = formatoPrecio(minimo);
+                document.getElementById('precioMaximo').textContent = formatoPrecio(maximo);
+                const variacionElemento = document.getElementById('variacionPrecio');
+                variacionElemento.textContent = `${variacion >= 0 ? '+' : ''}${variacion.toFixed(2)}%`;
+                variacionElemento.className = `fw-bold ${variacion <= 0 ? 'text-success' : 'text-danger'}`;
+
+                chartInstance = new Chart(document.getElementById('chartHistorial'), {
+                    type: 'line',
+                    data: {
+                        labels: historial.fechas,
+                        datasets: [{
+                            label: 'Precio',
+                            data: precios,
+                            borderColor: '#00f5d4',
+                            backgroundColor: 'rgba(0, 245, 212, 0.16)',
+                            pointBackgroundColor: '#b8ff00',
+                            pointBorderColor: '#00f5d4',
+                            pointRadius: 4,
+                            tension: 0.25,
+                            fill: true
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { labels: { color: '#f8f9fa' } },
+                            tooltip: { callbacks: { label: context => formatoPrecio(context.parsed.y) } }
+                        },
+                        scales: {
+                            x: { ticks: { color: '#adb5bd' }, grid: { color: 'rgba(255,255,255,0.08)' } },
+                            y: { ticks: { color: '#adb5bd', callback: value => formatoPrecio(value) }, grid: { color: 'rgba(255,255,255,0.08)' } }
+                        }
+                    }
+                });
+
+            } catch (error) {
+                document.getElementById('precioMinimo').textContent = 'Sin datos';
+                document.getElementById('precioMaximo').textContent = 'Sin datos';
+                document.getElementById('variacionPrecio').textContent = 'Sin datos';
+                alert(error.message);
+            }
+        }
+
+        async function quitarSeguimiento(enlace, idFila) {
+            if (!confirm("¿Querés quitar este producto de tu seguimiento?")) return;
+
+            try {
+                const res = await fetch('/toggle_seguimiento', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enlace, accion: "eliminar" })
+                });
+
+                const data = await res.json();
+                if (res.ok && data.status === "ok") {
+                    document.getElementById(idFila).remove();
+                } else {
+                    alert("No se pudo eliminar el producto.");
+                }
+            } catch (err) {
+                alert("Error de conexión con el servidor.");
+            }
+        }
+    </script>
+</body>
+</html>
