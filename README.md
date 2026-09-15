@@ -79,8 +79,8 @@ Sistema de monitoreo inteligente y automatizado de precios de hardware en Argent
 ### 1. Clonar el repositorio
 
 ```bash
-git clone https://github.com/TU_USUARIO/mercado_hardware.git
-cd mercado_hardware
+git clone https://github.com/FacundoDeseff/hardware-tracker-ecosystem.git
+cd hardware-tracker-ecosystem
 ```
 
 ### 2. Crear y activar el entorno virtual
