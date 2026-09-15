@@ -4,7 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 from flask import Flask, render_template, request, jsonify, redirect
 from agregador import buscar_hardgamers
-from pc_builder import CATEGORIA_BUSQUEDA, clasificar_tipo, enriquecer_resultados, validar_compatibilidad
+from pc_builder import CATEGORIA_BUSQUEDA, clasificar_tipo, deduplicar_por_precio, enriquecer_resultados, filtrar_tiendas_permitidas, tienda_desde_url, validar_compatibilidad
 
 app = Flask(__name__)
 
@@ -136,16 +136,20 @@ def builder_options():
     busqueda = request.args.get("q", "").strip()
     socket = request.args.get("socket", "").strip()
     ram_type = request.args.get("ram_type", "").strip()
-    recommended_watts = request.args.get("recommended_watts", type=int)
+    brand = request.args.get("brand", "").strip()
+    recommended_watts = request.args.get("recommended_watts", default=0, type=int) or 0
+    page = max(request.args.get("page", default=1, type=int) or 1, 1)
+    page_size = 20
+    local_only = request.args.get("local", "").strip().lower() in {"1", "true", "yes"}
     if tipo not in CATEGORIA_BUSQUEDA:
         return jsonify({"status": "error", "mensaje": "Categoría no válida"}), 400
 
     if tipo == "cpu":
-        consulta = f"procesador {busqueda or 'Ryzen'}"
+        consulta = f"procesador {busqueda or brand or 'Ryzen'}"
     elif tipo == "motherboard":
         consulta = f"motherboard {socket}" if socket else f"motherboard {busqueda}".strip()
     elif tipo == "ram":
-        consulta = f"memoria {ram_type}" if ram_type else f"memoria {busqueda}".strip()
+        consulta = f"memoria ram {ram_type}" if ram_type else f"memoria ram {busqueda or 'ddr4 ddr5'}"
     elif tipo == "gpu":
         consulta = f"placa de video {busqueda or 'RTX RX'}"
     elif tipo == "psu":
@@ -159,25 +163,66 @@ def builder_options():
     else:
         consulta = f"monitor {busqueda or 'gaming'}"
 
-    try:
-        resultados = buscar_hardgamers(consulta, ordenar_menor_precio=True)
-    except Exception:
-        resultados = []
-    opciones = enriquecer_resultados(resultados, tipo)
+    opciones = []
+    fuente = "live"
+    mensaje = ""
+    if not local_only:
+        try:
+            consulta_live = consulta if not brand or brand.casefold() in consulta.casefold() else f"{consulta} {brand}".strip()
+            resultados = buscar_hardgamers(consulta_live, ordenar_menor_precio=True)
+            resultados = filtrar_tiendas_permitidas(resultados)
+            opciones = enriquecer_resultados(resultados, tipo)
+            if brand:
+                marca = brand.casefold()
+                opciones = [
+                    opcion for opcion in opciones
+                    if marca in opcion.get("nombre", "").casefold()
+                    or marca in opcion.get("tienda", "").casefold()
+                ]
+            opciones = filtrar_opciones_builder(opciones, socket, ram_type, recommended_watts, tipo)
+        except Exception as error:
+            mensaje = f"La consulta en vivo falló: {error}"
+    else:
+        mensaje = "Mostrando opciones guardadas localmente."
+
+    opciones = deduplicar_por_precio(opciones, tipo)
+    offset = (page - 1) * page_size
+    if not opciones or offset >= len(opciones):
+        fuente = "local"
+        opciones = deduplicar_por_precio(obtener_opciones_locales(tipo, socket, ram_type, recommended_watts, brand=brand), tipo)
+        pagina, has_more = paginar_opciones_unicas(opciones, page, page_size)
+    else:
+        pagina, has_more = paginar_opciones_unicas(opciones, page, page_size)
+    for opcion in opciones:
+        BUILDER_OPTIONS_CACHE[opcion["id"]] = opcion
+    return jsonify({
+        "status": "ok",
+        "opciones": pagina,
+        "page": page,
+        "page_size": page_size,
+        "has_more": has_more,
+        "fuente": fuente,
+        "mensaje": mensaje,
+    })
+
+
+def filtrar_opciones_builder(opciones, socket=None, ram_type=None, recommended_watts=0, tipo=None):
     if socket:
         opciones = [opcion for opcion in opciones if opcion.get("socket") == socket]
     if ram_type:
         opciones = [opcion for opcion in opciones if opcion.get("ram_type") == ram_type]
     if tipo == "psu" and recommended_watts:
         opciones = [opcion for opcion in opciones if opcion.get("watts", 0) >= recommended_watts]
-    if not opciones:
-        opciones = obtener_opciones_locales(tipo, socket, ram_type, recommended_watts)
-    for opcion in opciones:
-        BUILDER_OPTIONS_CACHE[opcion["id"]] = opcion
-    return jsonify({"status": "ok", "opciones": opciones})
+    return opciones
 
 
-def obtener_opciones_locales(tipo, socket=None, ram_type=None, recommended_watts=None):
+def paginar_opciones_unicas(opciones, page, page_size):
+    """Corta exclusivamente una colección ya deduplicada."""
+    offset = (max(page, 1) - 1) * page_size
+    return opciones[offset:offset + page_size], len(opciones) > offset + page_size
+
+
+def obtener_opciones_locales(tipo, socket=None, ram_type=None, recommended_watts=0, brand=""):
     conexion = sqlite3.connect("hardware_tracker.db")
     try:
         filas = conexion.execute("""
@@ -190,7 +235,6 @@ def obtener_opciones_locales(tipo, socket=None, ram_type=None, recommended_watts
                 GROUP BY url_publicacion
             )
             ORDER BY h.fecha DESC
-            LIMIT 80
         """).fetchall()
     finally:
         conexion.close()
@@ -199,20 +243,22 @@ def obtener_opciones_locales(tipo, socket=None, ram_type=None, recommended_watts
     for url, nombre, precio in filas:
         if clasificar_tipo(nombre) != tipo:
             continue
+        tienda = tienda_desde_url(url)
+        if not tienda:
+            continue
         opcion = enriquecer_resultados([{
             "titulo": nombre,
-            "tienda": "Guardado local",
+            "tienda": tienda,
             "precio": precio,
             "enlace": url,
             "imagen": "",
         }], tipo)[0]
-        if socket and opcion.get("socket") and opcion["socket"] != socket:
-            continue
-        if ram_type and opcion.get("ram_type") and opcion["ram_type"] != ram_type:
-            continue
-        if recommended_watts and tipo == "psu" and opcion.get("watts", 0) < recommended_watts:
-            continue
-        resultados.append(opcion)
+        if brand:
+            marca = brand.casefold()
+            if marca not in opcion.get("nombre", "").casefold() and marca not in opcion.get("tienda", "").casefold():
+                continue
+        if filtrar_opciones_builder([opcion], socket, ram_type, recommended_watts, tipo):
+            resultados.append(opcion)
     for opcion in resultados:
         BUILDER_OPTIONS_CACHE[opcion["id"]] = opcion
     return resultados

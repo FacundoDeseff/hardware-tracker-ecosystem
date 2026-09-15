@@ -2,6 +2,18 @@
 
 import hashlib
 import re
+import unicodedata
+from urllib.parse import urlparse
+
+
+TIENDAS_WHITELIST = [
+    "venex",
+    "compra gamer",
+    "compragamer",
+    "gaming city",
+    "mercado libre",
+    "mercadolibre",
+]
 
 
 CATEGORIA_BUSQUEDA = {
@@ -117,6 +129,75 @@ def enriquecer_resultados(resultados, tipo):
         for resultado in resultados
         if resultado.get("precio", 0) > 0
     ]
+
+
+def normalizar_tienda(tienda):
+    texto = unicodedata.normalize("NFKD", str(tienda or "")).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z0-9]+", " ", texto).strip()
+
+
+def tienda_en_whitelist(tienda):
+    normalizada = normalizar_tienda(tienda)
+    return normalizada in TIENDAS_WHITELIST
+
+
+def tienda_desde_url(url):
+    dominio = urlparse(str(url or "")).netloc.lower().split(":", 1)[0]
+    if not dominio:
+        return ""
+    if "venex" in dominio:
+        return "venex"
+    if "compragamer" in dominio:
+        return "compragamer"
+    if "gamingcity" in dominio:
+        return "gaming city"
+    if "mercadolibre" in dominio or dominio.endswith(".ml.com"):
+        return "mercadolibre"
+    return ""
+
+
+def filtrar_tiendas_permitidas(resultados):
+    return [
+        resultado for resultado in resultados
+        if tienda_en_whitelist(resultado.get("tienda"))
+    ]
+
+
+PALABRAS_PRODUCTO_GENERICAS = {
+    "procesador", "microprocesador", "motherboard", "placa", "video", "memoria",
+    "ram", "box", "tray", "s1700", "lga1700", "am4", "am5", "intel", "amd",
+}
+
+
+def modelo_producto(nombre, tipo=""):
+    """Devuelve una clave estable para agrupar ofertas del mismo modelo."""
+    texto = unicodedata.normalize("NFKD", str(nombre or "")).encode("ascii", "ignore").decode().lower()
+    texto = re.sub(r"[^a-z0-9]+", " ", texto)
+    patrones = (
+        r"\b(ryzen\s*[3579]\s*\d{3,5}[a-z0-9]*)\b",
+        r"\b(core\s*i[3579]\s*\d{3,5}[a-z0-9]*)\b",
+        r"\b(i[3579]\s*\d{3,5}[a-z0-9]*)\b",
+        r"\b((?:rtx|gtx|rx|arc)\s*[a-z]?\s*\d{3,4}(?:\s*(?:xt|ti|super))?)\b",
+    )
+    for patron in patrones:
+        coincidencia = re.search(patron, texto)
+        if coincidencia:
+            return re.sub(r"\s+", "", coincidencia.group(1))
+
+    tokens = [token for token in texto.split() if token not in PALABRAS_PRODUCTO_GENERICAS]
+    return " ".join(tokens) or tipo or "producto"
+
+
+def deduplicar_por_precio(opciones, tipo=""):
+    """Conserva la oferta mas barata de cada modelo antes de paginar."""
+    mejores = {}
+    for opcion in opciones:
+        clave = modelo_producto(opcion.get("nombre", ""), tipo)
+        precio = float(opcion.get("precio", 0) or 0)
+        actual = mejores.get(clave)
+        if actual is None or precio < float(actual.get("precio", 0) or 0):
+            mejores[clave] = opcion
+    return list(mejores.values())
 
 
 def validar_compatibilidad(componentes):
