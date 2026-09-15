@@ -4,6 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 from flask import Flask, render_template, request, jsonify, redirect
 from agregador import buscar_hardgamers
+from pc_builder import filtrar_opciones, indexar_catalogo, obtener_catalogo, validar_compatibilidad
 
 app = Flask(__name__)
 
@@ -123,6 +124,63 @@ def actualizar_precio_objetivo(componente_id):
         conexion.close()
 
     return jsonify({"status": "ok", "precio_objetivo": precio_objetivo})
+
+@app.route("/builder")
+def builder():
+    return render_template("builder.html", catalogo=obtener_catalogo())
+
+@app.route("/api/builder/options")
+def builder_options():
+    tipo = request.args.get("tipo", "").strip().lower()
+    socket = request.args.get("socket", "").strip()
+    ram_type = request.args.get("ram_type", "").strip()
+    tipos_validos = {componente["tipo"] for componente in obtener_catalogo()}
+    if tipo not in tipos_validos:
+        return jsonify({"status": "error", "mensaje": "Categoría no válida"}), 400
+    return jsonify({"status": "ok", "opciones": filtrar_opciones(tipo, socket, ram_type)})
+
+@app.route("/api/builder/validate", methods=["POST"])
+def builder_validate():
+    datos = request.get_json(silent=True) or {}
+    seleccionados = datos.get("componentes", datos)
+    catalogo = indexar_catalogo()
+    componentes = {}
+    errores = []
+
+    for tipo, componente_id in seleccionados.items():
+        if not componente_id:
+            continue
+        componente = catalogo.get(componente_id)
+        if not componente or componente["tipo"] != tipo:
+            errores.append(f"La selección de {tipo} no es válida.")
+            continue
+        componentes[tipo] = componente
+
+    resultado = validar_compatibilidad(componentes)
+    resultado["errores"] = errores + resultado["errores"]
+    resultado["compatible"] = not resultado["errores"]
+    resultado["componentes"] = componentes
+    return jsonify({"status": "ok", **resultado})
+
+@app.route("/api/builder/save", methods=["POST"])
+def builder_save():
+    datos = request.get_json(silent=True) or {}
+    seleccionados = datos.get("componentes", datos)
+    catalogo = indexar_catalogo()
+    guardados = 0
+    for tipo, componente_id in seleccionados.items():
+        componente = catalogo.get(componente_id)
+        if not componente or componente["tipo"] != tipo:
+            continue
+        registrar_en_db(
+            nombre=f"[Build] {componente['nombre']}",
+            precio=float(componente["precio"]),
+            url=f"builder://{componente['id']}",
+        )
+        guardados += 1
+    if not guardados:
+        return jsonify({"status": "error", "mensaje": "No hay componentes seleccionados"}), 400
+    return jsonify({"status": "ok", "guardados": guardados})
 
 @app.route("/", methods=["GET", "POST"])
 def index():
