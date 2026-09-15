@@ -4,7 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 from flask import Flask, render_template, request, jsonify, redirect
 from agregador import buscar_hardgamers
-from pc_builder import CATEGORIA_BUSQUEDA, enriquecer_resultados, validar_compatibilidad
+from pc_builder import CATEGORIA_BUSQUEDA, clasificar_tipo, enriquecer_resultados, validar_compatibilidad
 
 app = Flask(__name__)
 
@@ -140,8 +140,23 @@ def builder_options():
     if tipo not in CATEGORIA_BUSQUEDA:
         return jsonify({"status": "error", "mensaje": "Categoría no válida"}), 400
 
-    consulta = busqueda or CATEGORIA_BUSQUEDA[tipo]
-    resultados = buscar_hardgamers(consulta, ordenar_menor_precio=True)
+    if tipo == "cpu":
+        consulta = f"procesador {busqueda or 'Ryzen'}"
+    elif tipo == "motherboard":
+        consulta = f"motherboard {socket}" if socket else f"motherboard {busqueda}".strip()
+    elif tipo == "ram":
+        consulta = f"memoria {ram_type}" if ram_type else f"memoria {busqueda}".strip()
+    elif tipo == "gpu":
+        consulta = f"placa de video {busqueda or 'RTX RX'}"
+    elif tipo == "psu":
+        consulta = f"fuente de poder {busqueda or '650W'}"
+    else:
+        consulta = f"SSD {busqueda or 'NVMe'}"
+
+    try:
+        resultados = buscar_hardgamers(consulta, ordenar_menor_precio=True)
+    except Exception:
+        resultados = []
     opciones = enriquecer_resultados(resultados, tipo)
     if socket:
         opciones = [opcion for opcion in opciones if opcion.get("socket") == socket]
@@ -149,9 +164,52 @@ def builder_options():
         opciones = [opcion for opcion in opciones if opcion.get("ram_type") == ram_type]
     if tipo == "psu" and recommended_watts:
         opciones = [opcion for opcion in opciones if opcion.get("watts", 0) >= recommended_watts]
+    if not opciones:
+        opciones = obtener_opciones_locales(tipo, socket, ram_type, recommended_watts)
     for opcion in opciones:
         BUILDER_OPTIONS_CACHE[opcion["id"]] = opcion
     return jsonify({"status": "ok", "opciones": opciones})
+
+
+def obtener_opciones_locales(tipo, socket=None, ram_type=None, recommended_watts=None):
+    conexion = sqlite3.connect("hardware_tracker.db")
+    try:
+        filas = conexion.execute("""
+            SELECT h.url_publicacion, c.nombre, h.precio
+            FROM historial_precios h
+            INNER JOIN componentes c ON c.id = h.componente_id
+            WHERE h.id IN (
+                SELECT MAX(id) FROM historial_precios
+                WHERE url_publicacion IS NOT NULL
+                GROUP BY url_publicacion
+            )
+            ORDER BY h.fecha DESC
+            LIMIT 80
+        """).fetchall()
+    finally:
+        conexion.close()
+
+    resultados = []
+    for url, nombre, precio in filas:
+        if clasificar_tipo(nombre) != tipo:
+            continue
+        opcion = enriquecer_resultados([{
+            "titulo": nombre,
+            "tienda": "Guardado local",
+            "precio": precio,
+            "enlace": url,
+            "imagen": "",
+        }], tipo)[0]
+        if socket and opcion.get("socket") and opcion["socket"] != socket:
+            continue
+        if ram_type and opcion.get("ram_type") and opcion["ram_type"] != ram_type:
+            continue
+        if recommended_watts and tipo == "psu" and opcion.get("watts", 0) < recommended_watts:
+            continue
+        resultados.append(opcion)
+    for opcion in resultados:
+        BUILDER_OPTIONS_CACHE[opcion["id"]] = opcion
+    return resultados
 
 
 def componentes_seleccionados(seleccionados):

@@ -5,13 +5,30 @@ import re
 
 
 CATEGORIA_BUSQUEDA = {
-    "cpu": "procesador AMD Ryzen Intel Core",
-    "motherboard": "motherboard placa madre AM4 AM5 LGA1700 LGA1851",
-    "ram": "memoria RAM DDR4 DDR5",
-    "gpu": "placa video RTX RX Radeon GeForce",
-    "psu": "fuente poder 500W 650W 750W 850W",
-    "storage": "SSD NVMe almacenamiento",
+    "cpu": "procesador Ryzen",
+    "motherboard": "motherboard",
+    "ram": "memoria DDR4 DDR5",
+    "gpu": "placa de video RTX RX",
+    "psu": "fuente de poder 650W",
+    "storage": "SSD NVMe",
 }
+
+
+def clasificar_tipo(nombre):
+    texto = nombre.lower()
+    if any(term in texto for term in ("ryzen", "core i", "core ultra", "threadripper", "athlon")):
+        return "cpu"
+    if any(term in texto for term in ("motherboard", "placa madre", "b550", "b650", "b760", "z790", "z890", "a520", "x670")):
+        return "motherboard"
+    if "ddr4" in texto or "ddr5" in texto or "memoria ram" in texto:
+        return "ram"
+    if any(term in texto for term in ("rtx", "gtx", "radeon", "rx ", "placa de video", "placa video")):
+        return "gpu"
+    if any(term in texto for term in ("fuente", "power supply", "psu")):
+        return "psu"
+    if any(term in texto for term in ("ssd", "nvme", "disco sólido", "disco solido")):
+        return "storage"
+    return None
 
 
 def inferir_socket(texto):
