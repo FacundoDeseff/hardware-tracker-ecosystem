@@ -29,6 +29,36 @@ CATEGORIA_BUSQUEDA = {
 }
 
 
+CPU_CONSULTAS_SEMILLA = {
+    "intel": ["i3", "i5", "i7", "i9", "intel core"],
+    "amd": ["ryzen 3", "ryzen 5", "ryzen 7", "ryzen 9", "am4", "am5"],
+}
+
+
+def consultas_cpu(brand="", busqueda=""):
+    """Devuelve consultas semilla solo cuando el usuario no ingreso un modelo."""
+    termino = str(busqueda or "").strip()
+    if termino:
+        return [f"procesador {termino}"]
+    marca = str(brand or "").strip().casefold()
+    if marca == "intel":
+        semillas = CPU_CONSULTAS_SEMILLA["intel"]
+    elif marca == "amd":
+        semillas = CPU_CONSULTAS_SEMILLA["amd"]
+    else:
+        semillas = CPU_CONSULTAS_SEMILLA["intel"] + CPU_CONSULTAS_SEMILLA["amd"]
+    return [f"procesador {semilla}" for semilla in semillas]
+
+
+def consultas_rescate_cpu(brand=""):
+    marca = str(brand or "").strip().casefold()
+    if marca == "intel":
+        return ["intel"]
+    if marca == "amd":
+        return ["ryzen"]
+    return ["procesador"]
+
+
 def clasificar_tipo(nombre):
     texto = nombre.lower()
     if any(term in texto for term in ("ryzen", "core i", "core ultra", "threadripper", "athlon")):
@@ -110,8 +140,8 @@ def normalizar_resultado(resultado, tipo):
         "tipo": tipo,
         "nombre": resultado.get("titulo", "Producto sin nombre"),
         "tienda": resultado.get("tienda", "Tienda no especificada"),
-        "precio": float(resultado.get("precio", 0)),
-        "imagen": resultado.get("imagen", ""),
+        "precio": parsear_precio(resultado.get("precio", 0)),
+        "imagen": resultado.get("imagen") or resultado.get("imagen_url") or resultado.get("image") or "",
         "enlace": enlace,
         "socket": inferir_socket(texto),
         "ram_type": inferir_ram_type(texto),
@@ -127,8 +157,22 @@ def enriquecer_resultados(resultados, tipo):
     return [
         normalizar_resultado(resultado, tipo)
         for resultado in resultados
-        if resultado.get("precio", 0) > 0
+        if parsear_precio(resultado.get("precio", 0)) > 0
+        and url_compra_valida(resultado.get("enlace", ""))
     ]
+
+
+def parsear_precio(valor):
+    """Extrae solo dígitos de precios con texto promocional o formato local."""
+    if isinstance(valor, (int, float)):
+        return float(valor)
+    digitos = re.sub(r"[^\d]", "", str(valor or ""))
+    return float(digitos) if digitos else 0.0
+
+
+def url_compra_valida(url):
+    parsed = urlparse(str(url or ""))
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 def normalizar_tienda(tienda):
@@ -136,9 +180,13 @@ def normalizar_tienda(tienda):
     return re.sub(r"[^a-z0-9]+", " ", texto).strip()
 
 
+def clave_tienda(tienda):
+    return normalizar_tienda(tienda).replace(" ", "")
+
+
 def tienda_en_whitelist(tienda):
-    normalizada = normalizar_tienda(tienda)
-    return normalizada in TIENDAS_WHITELIST
+    permitidas = {clave.replace(" ", "") for clave in TIENDAS_WHITELIST}
+    return clave_tienda(tienda) in permitidas
 
 
 def tienda_desde_url(url):
@@ -153,7 +201,7 @@ def tienda_desde_url(url):
         return "gaming city"
     if "mercadolibre" in dominio or dominio.endswith(".ml.com"):
         return "mercadolibre"
-    return ""
+    return dominio.removeprefix("www.")
 
 
 def filtrar_tiendas_permitidas(resultados):
@@ -192,6 +240,8 @@ def deduplicar_por_precio(opciones, tipo=""):
     """Conserva la oferta mas barata de cada modelo antes de paginar."""
     mejores = {}
     for opcion in opciones:
+        if float(opcion.get("precio", 0) or 0) <= 0 or not url_compra_valida(opcion.get("enlace", "")):
+            continue
         clave = modelo_producto(opcion.get("nombre", ""), tipo)
         precio = float(opcion.get("precio", 0) or 0)
         actual = mejores.get(clave)

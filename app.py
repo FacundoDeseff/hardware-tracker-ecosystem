@@ -4,7 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 from flask import Flask, render_template, request, jsonify, redirect
 from agregador import buscar_hardgamers
-from pc_builder import CATEGORIA_BUSQUEDA, clasificar_tipo, deduplicar_por_precio, enriquecer_resultados, filtrar_tiendas_permitidas, tienda_desde_url, validar_compatibilidad
+from pc_builder import CATEGORIA_BUSQUEDA, clasificar_tipo, consultas_cpu, consultas_rescate_cpu, deduplicar_por_precio, enriquecer_resultados, filtrar_tiendas_permitidas, normalizar_resultado, parsear_precio, tienda_desde_url, tienda_en_whitelist, url_compra_valida, validar_compatibilidad
 
 app = Flask(__name__)
 
@@ -144,8 +144,10 @@ def builder_options():
     if tipo not in CATEGORIA_BUSQUEDA:
         return jsonify({"status": "error", "mensaje": "Categoría no válida"}), 400
 
+    marca = brand.casefold()
+    marca_filtro = marca if marca in {"intel", "amd"} else ""
     if tipo == "cpu":
-        consulta = f"procesador {busqueda or brand or 'Ryzen'}"
+        consultas = consultas_cpu(marca_filtro, busqueda)
     elif tipo == "motherboard":
         consulta = f"motherboard {socket}" if socket else f"motherboard {busqueda}".strip()
     elif tipo == "ram":
@@ -163,36 +165,52 @@ def builder_options():
     else:
         consulta = f"monitor {busqueda or 'gaming'}"
 
+    if tipo != "cpu":
+        consultas = [consulta]
+
     opciones = []
-    fuente = "live"
+    fuente = "local"
     mensaje = ""
-    if not local_only:
+    navegacion_catalogo = not busqueda
+    if navegacion_catalogo or local_only:
+        mensaje = "Catálogo local cargado." if navegacion_catalogo else "Mostrando opciones guardadas localmente."
+    else:
         try:
-            consulta_live = consulta if not brand or brand.casefold() in consulta.casefold() else f"{consulta} {brand}".strip()
-            resultados = buscar_hardgamers(consulta_live, ordenar_menor_precio=True)
+            resultados = buscar_hardgamers(consultas[0], ordenar_menor_precio=True, timeout=8)
             resultados = filtrar_tiendas_permitidas(resultados)
             opciones = enriquecer_resultados(resultados, tipo)
-            if brand:
-                marca = brand.casefold()
+            if marca_filtro:
                 opciones = [
                     opcion for opcion in opciones
-                    if marca in opcion.get("nombre", "").casefold()
-                    or marca in opcion.get("tienda", "").casefold()
+                    if marca_filtro in opcion.get("nombre", "").casefold()
                 ]
             opciones = filtrar_opciones_builder(opciones, socket, ram_type, recommended_watts, tipo)
+            fuente = "live"
         except Exception as error:
-            mensaje = f"La consulta en vivo falló: {error}"
-    else:
-        mensaje = "Mostrando opciones guardadas localmente."
+            mensaje = f"Búsqueda en vivo no disponible; usando catálogo local. ({error})"
 
+    # Completa el pool vivo con todo el historial local antes de deduplicar.
+    # La consulta local no tiene LIMIT: el corte de 20 ocurre únicamente abajo.
+    habia_opciones_vivas = bool(opciones)
+    opciones_locales = obtener_opciones_locales(
+        tipo, socket, ram_type, recommended_watts, brand=marca_filtro,
+        solo_whitelist=True, query=busqueda,
+    )
+    if len(opciones_locales) < 5:
+        opciones_ampliadas = obtener_opciones_locales(
+            tipo, socket, ram_type, recommended_watts, brand=marca_filtro,
+            solo_whitelist=False, query=busqueda,
+        )
+        if len(opciones_ampliadas) > len(opciones_locales):
+            opciones_locales = opciones_ampliadas
+    opciones_locales = deduplicar_por_precio(opciones_locales, tipo)
+    opciones.extend(opciones_locales)
     opciones = deduplicar_por_precio(opciones, tipo)
+    opciones.sort(key=lambda opcion: float(opcion.get("precio", 0) or 0))
     offset = (page - 1) * page_size
-    if not opciones or offset >= len(opciones):
+    if not habia_opciones_vivas and opciones:
         fuente = "local"
-        opciones = deduplicar_por_precio(obtener_opciones_locales(tipo, socket, ram_type, recommended_watts, brand=brand), tipo)
-        pagina, has_more = paginar_opciones_unicas(opciones, page, page_size)
-    else:
-        pagina, has_more = paginar_opciones_unicas(opciones, page, page_size)
+    pagina, has_more = paginar_opciones_unicas(opciones, page, page_size)
     for opcion in opciones:
         BUILDER_OPTIONS_CACHE[opcion["id"]] = opcion
     return jsonify({
@@ -222,10 +240,54 @@ def paginar_opciones_unicas(opciones, page, page_size):
     return opciones[offset:offset + page_size], len(opciones) > offset + page_size
 
 
-def obtener_opciones_locales(tipo, socket=None, ram_type=None, recommended_watts=0, brand=""):
+def limpiar_historial_urls_invalidas(conexion):
+    conexion.execute("""
+        DELETE FROM historial_precios
+        WHERE url_publicacion IS NULL
+           OR TRIM(url_publicacion) = ''
+           OR (LOWER(TRIM(url_publicacion)) NOT LIKE 'http://%'
+               AND LOWER(TRIM(url_publicacion)) NOT LIKE 'https://%')
+    """)
+    conexion.commit()
+
+
+def obtener_opciones_locales(tipo, socket=None, ram_type=None, recommended_watts=0, brand="", solo_whitelist=True, query=""):
+    if tipo == "cpu":
+        return obtener_opciones_cpu_sqlite(brand=brand, query=query, solo_whitelist=solo_whitelist)
+
     conexion = sqlite3.connect("hardware_tracker.db")
     try:
-        filas = conexion.execute("""
+        condiciones = ["h.url_publicacion IS NOT NULL", "h.precio > 0"]
+        parametros = []
+        if tipo == "cpu":
+            condiciones.append("(" + " OR ".join([
+                "LOWER(c.categoria) LIKE ?",
+                "LOWER(c.categoria) LIKE ?",
+                "LOWER(c.nombre) LIKE ?",
+                "LOWER(c.nombre) LIKE ?",
+                "LOWER(c.nombre) LIKE ?",
+                "LOWER(c.nombre) LIKE ?",
+            ]) + ")")
+            parametros.extend(["%cpu%", "%procesador%", "%procesador%", "%ryzen%", "%intel%", "%core%"])
+            if brand == "intel":
+                condiciones.append("(" + " OR ".join([
+                    "LOWER(c.nombre) LIKE ?",
+                    "LOWER(c.nombre) LIKE ?",
+                    "LOWER(c.nombre) LIKE ?",
+                    "LOWER(c.nombre) LIKE ?",
+                ]) + ")")
+                parametros.extend(["%intel%", "%core i%", "%celeron%", "%pentium%"])
+            elif brand == "amd":
+                condiciones.append("(" + " OR ".join([
+                    "LOWER(c.nombre) LIKE ?",
+                    "LOWER(c.nombre) LIKE ?",
+                ]) + ")")
+                parametros.extend(["%amd%", "%ryzen%"])
+        else:
+            condiciones.append("LOWER(c.categoria) LIKE ?")
+            parametros.append(f"%{tipo}%")
+
+        filas = conexion.execute(f"""
             SELECT h.url_publicacion, c.nombre, h.precio
             FROM historial_precios h
             INNER JOIN componentes c ON c.id = h.componente_id
@@ -234,8 +296,24 @@ def obtener_opciones_locales(tipo, socket=None, ram_type=None, recommended_watts
                 WHERE url_publicacion IS NOT NULL
                 GROUP BY url_publicacion
             )
+            AND {' AND '.join(condiciones)}
             ORDER BY h.fecha DESC
-        """).fetchall()
+        """, parametros).fetchall()
+        if not filas:
+            fallback_condiciones = [condicion for condicion in condiciones if condicion != "h.url_publicacion IS NOT NULL" and condicion != "h.precio > 0"]
+            fallback_condiciones.append("COALESCE(h.precio, c.precio_objetivo, 0) > 0")
+            filas = conexion.execute(f"""
+                SELECT COALESCE(h.url_publicacion, ''), c.nombre,
+                       COALESCE(h.precio, c.precio_objetivo, 0)
+                FROM componentes c
+                LEFT JOIN historial_precios h ON h.id = (
+                    SELECT hp.id FROM historial_precios hp
+                    WHERE hp.componente_id = c.id
+                    ORDER BY hp.id DESC LIMIT 1
+                )
+                WHERE {' AND '.join(fallback_condiciones)}
+                ORDER BY COALESCE(h.precio, c.precio_objetivo, 0) ASC, c.id ASC
+            """, parametros).fetchall()
     finally:
         conexion.close()
 
@@ -243,16 +321,18 @@ def obtener_opciones_locales(tipo, socket=None, ram_type=None, recommended_watts
     for url, nombre, precio in filas:
         if clasificar_tipo(nombre) != tipo:
             continue
-        tienda = tienda_desde_url(url)
-        if not tienda:
+        tienda = tienda_desde_url(url) or "Catálogo local"
+        if not url_compra_valida(url) or parsear_precio(precio) <= 0:
             continue
-        opcion = enriquecer_resultados([{
+        if solo_whitelist and not tienda_en_whitelist(tienda):
+            continue
+        opcion = normalizar_resultado({
             "titulo": nombre,
             "tienda": tienda,
-            "precio": precio,
+            "precio": parsear_precio(precio),
             "enlace": url,
             "imagen": "",
-        }], tipo)[0]
+        }, tipo)
         if brand:
             marca = brand.casefold()
             if marca not in opcion.get("nombre", "").casefold() and marca not in opcion.get("tienda", "").casefold():
@@ -260,6 +340,62 @@ def obtener_opciones_locales(tipo, socket=None, ram_type=None, recommended_watts
         if filtrar_opciones_builder([opcion], socket, ram_type, recommended_watts, tipo):
             resultados.append(opcion)
     for opcion in resultados:
+        BUILDER_OPTIONS_CACHE[opcion["id"]] = opcion
+    return resultados
+
+
+def obtener_opciones_cpu_sqlite(brand="", query="", solo_whitelist=True):
+    """Carga CPUs desde las columnas enriquecidas y el último precio local."""
+    conexion = sqlite3.connect("hardware_tracker.db")
+    try:
+        limpiar_historial_urls_invalidas(conexion)
+        columnas = {fila[1] for fila in conexion.execute("PRAGMA table_info(componentes)")}
+        imagen = "c.imagen_url" if "imagen_url" in columnas else "''"
+        socket = "c.socket" if "socket" in columnas else "NULL"
+        tdp = "c.tdp" if "tdp" in columnas else "0"
+        condiciones = ["LOWER(c.categoria) = 'cpu'", "h.precio > 0", "h.url_publicacion IS NOT NULL"]
+        parametros = []
+        marca = str(brand or "").casefold()
+        if marca == "intel":
+            condiciones.append("(LOWER(c.nombre) LIKE ? OR LOWER(c.nombre) LIKE ?)")
+            parametros.extend(["%intel%", "%core%"])
+        elif marca == "amd":
+            condiciones.append("(LOWER(c.nombre) LIKE ? OR LOWER(c.nombre) LIKE ?)")
+            parametros.extend(["%amd%", "%ryzen%"])
+        termino = str(query or "").strip().casefold()
+        if termino:
+            condiciones.append("LOWER(c.nombre) LIKE ?")
+            parametros.append(f"%{termino}%")
+        filas = conexion.execute(f"""
+            SELECT c.id, c.nombre, {imagen}, {socket}, {tdp}, h.precio, h.url_publicacion
+            FROM componentes c
+            JOIN historial_precios h ON h.id = (
+                SELECT MAX(h2.id) FROM historial_precios h2
+                WHERE h2.componente_id = c.id
+            )
+            WHERE {' AND '.join(condiciones)}
+            ORDER BY h.precio ASC
+        """, parametros).fetchall()
+    finally:
+        conexion.close()
+
+    resultados = []
+    for componente_id, nombre, imagen, socket, tdp, precio, url in filas:
+        if parsear_precio(precio) <= 0 or not url_compra_valida(url):
+            continue
+        tienda = tienda_desde_url(url)
+        if solo_whitelist and not tienda_en_whitelist(tienda):
+            continue
+        opcion = normalizar_resultado({
+            "titulo": nombre,
+            "tienda": tienda,
+            "precio": precio,
+            "enlace": url,
+            "imagen": imagen,
+        }, "cpu")
+        opcion["socket"] = socket or opcion["socket"]
+        opcion["tdp"] = int(tdp or opcion["tdp"] or 0)
+        resultados.append(opcion)
         BUILDER_OPTIONS_CACHE[opcion["id"]] = opcion
     return resultados
 

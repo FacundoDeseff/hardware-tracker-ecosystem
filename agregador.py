@@ -1,15 +1,48 @@
 import requests
 from bs4 import BeautifulSoup
+import re
+from urllib.parse import urlencode, urlparse
 
-def buscar_hardgamers(producto, ordenar_menor_precio=True):
+
+def normalizar_enlace(enlace):
+    enlace = str(enlace or "").strip()
+    if enlace.startswith("//"):
+        return "https:" + enlace
+    if enlace.startswith("/"):
+        return "https://www.hardgamers.com.ar" + enlace
+    if enlace and not urlparse(enlace).scheme:
+        return "https://" + enlace
+    return enlace
+
+
+def tienda_desde_resultado(tienda, enlace):
+    dominio = urlparse(str(enlace or "")).netloc.casefold().replace("-", "")
+    if "compragamer" in dominio:
+        return "Compra Gamer"
+    if "venex" in dominio:
+        return "Venex"
+    if "gamingcity" in dominio:
+        return "Gaming City"
+    return tienda
+
+def buscar_hardgamers(producto, ordenar_menor_precio=True, timeout=8):
     print(f"🔎 Buscando '{producto}' en tiendas de Argentina...")
     
-    url = f"https://www.hardgamers.com.ar/search?text={producto.replace(' ', '%20')}"
+    parametros = {
+        "text": producto,
+        "sort": "price_asc" if ordenar_menor_precio else "price_desc",
+        "limit": 40,
+    }
+    url = f"https://www.hardgamers.com.ar/search?{urlencode(parametros)}"
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
     }
     
-    res = requests.get(url, headers=headers)
+    try:
+        res = requests.get(url, headers=headers, timeout=timeout)
+    except requests.RequestException as error:
+        print(f"⚠️ Error de red al buscar '{producto}': {error}")
+        return []
     if res.status_code != 200:
         print(f"❌ Error al conectar: {res.status_code}")
         return []
@@ -43,28 +76,35 @@ def buscar_hardgamers(producto, ordenar_menor_precio=True):
             if terminos_busqueda and not coincide:
                 continue
 
-            tienda = tienda_tag.get_text(strip=True)
+            tienda = tienda_tag.get_text(" ", strip=True)
+            tienda_clave = re.sub(r"[^a-z0-9]", "", tienda.casefold())
+            if tienda_clave == "compragamer":
+                tienda = "compragamer"
             
-            precio_val = precio_tag.get('content') or precio_tag.get_text(strip=True).replace('$', '').replace('.', '').strip()
-            precio = float(precio_val)
+            precio_texto = precio_tag.get('content') or precio_tag.get_text(" ", strip=True)
+            precio_digitos = re.sub(r"[^\d]", "", precio_texto)
+            if not precio_digitos:
+                continue
+            precio = float(precio_digitos)
 
-            enlace = link_tag['href'] if link_tag else ""
-            if enlace.startswith('/'):
-                enlace = "https://www.hardgamers.com.ar" + enlace
+            enlace = normalizar_enlace(link_tag['href'] if link_tag else "")
+            tienda = tienda_desde_resultado(tienda, enlace)
 
-            imagen = ""
-            if img_tag:
-                for attr in ['data-src', 'data-original', 'src', 'data-lazy']:
-                    c = img_tag.get(attr)
-                    if c and not c.endswith('.svg') and 'nofound' not in c and 'placeholder' not in c:
-                        imagen = c
-                        break
-
-            if imagen:
-                if imagen.startswith('//'):
-                    imagen = "https:" + imagen
-                elif imagen.startswith('/'):
-                    imagen = "https://www.hardgamers.com.ar" + imagen
+            imagen = None
+            try:
+                if img_tag:
+                    for attr in ['data-src', 'data-original', 'src', 'data-lazy']:
+                        c = img_tag.get(attr)
+                        if c and not c.endswith('.svg') and 'nofound' not in c and 'placeholder' not in c:
+                            imagen = c
+                            break
+                if imagen:
+                    if imagen.startswith('//'):
+                        imagen = "https:" + imagen
+                    elif imagen.startswith('/'):
+                        imagen = "https://www.hardgamers.com.ar" + imagen
+            except Exception:
+                imagen = None
 
             resultados.append({
                 "tienda": tienda,
